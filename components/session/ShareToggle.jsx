@@ -1,28 +1,33 @@
+// components/common/ShareToggle.jsx
 "use client";
 
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 
-export default function ShareToggle({ sessionId, appUrl = "" }) {
+export default function ShareToggle({ sessionId }) {
   const [enabled, setEnabled] = useState(false);
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let alive = true;
     (async () => {
       try {
         const res = await fetch(`/api/session/${sessionId}/share`, { cache: "no-store" });
         const j = await res.json();
-        if (res.ok) {
-          setEnabled(!!j.enabled);
-          if (j.token) setUrl(`${appUrl || window.location.origin}/share/${j.token}`);
-        }
+        if (!res.ok) throw new Error(j?.error || "Failed to load share");
+        if (!alive) return;
+        setEnabled(!!j.enabled);
+        setUrl(j.url || "");
+      } catch (e) {
+        toast.error(e.message || "Share load failed");
       } finally {
-        setLoading(false);
+        if (alive) setLoading(false);
       }
     })();
-  }, [sessionId, appUrl]);
+    return () => { alive = false; };
+  }, [sessionId]);
 
   async function toggle(next) {
     setLoading(true);
@@ -33,23 +38,25 @@ export default function ShareToggle({ sessionId, appUrl = "" }) {
         body: JSON.stringify({ enabled: next }),
       });
       const j = await res.json();
-      if (res.ok) {
-        setEnabled(j.enabled);
-        setUrl(j.url || "");
-        toast.success(j.enabled ? "Sharing enabled" : "Sharing disabled");
-      } else {
-        toast.error(j?.error || "Share update failed");
-      }
-    } catch {
-      toast.error("Network error");
+      if (!res.ok) throw new Error(j?.error || "Share update failed");
+      setEnabled(!!j.enabled);
+      setUrl(j.url || "");
+      toast.success(j.enabled ? "Sharing enabled" : "Sharing disabled");
+    } catch (e) {
+      toast.error(e.message || "Network error");
     } finally {
       setLoading(false);
     }
   }
 
-  function copy() {
+  async function copy() {
     if (!url) return;
-    navigator.clipboard.writeText(url).then(() => toast.success("Link copied"));
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.success("Link copied");
+    } catch {
+      toast.error("Copy failed");
+    }
   }
 
   return (
@@ -60,17 +67,12 @@ export default function ShareToggle({ sessionId, appUrl = "" }) {
         disabled={loading}
         onClick={() => toggle(!enabled)}
       >
-        {enabled ? "Disable share" : "Enable share"}
+        {enabled ? "Shared" : "Share"}
       </Button>
       {enabled && url && (
-        <>
-          <input
-            readOnly
-            value={url}
-            className="min-w-[220px] flex-1 rounded-md border bg-background p-2 text-sm"
-          />
-          <Button type="button" variant="outline" onClick={copy}>Copy link</Button>
-        </>
+        <Button type="button" variant="outline" onClick={copy}>
+          Copy link
+        </Button>
       )}
     </div>
   );

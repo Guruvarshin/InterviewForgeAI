@@ -1,9 +1,10 @@
+// app/api/session/[id]/share/route.js
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import crypto from "crypto";
+import crypto from "node:crypto";
 import { auth } from "@clerk/nextjs/server";
 import { connectDB } from "@/lib/db";
 import User from "@/models/User";
@@ -14,17 +15,31 @@ const patchSchema = z.object({
   includeNotes: z.boolean().optional(),
 });
 
-function resp(urlOrigin, s) {
-  const enabled = !!s?.share?.enabled;
-  const token = s?.share?.token || null;
-  return {
-    enabled,
-    includeNotes: !!s?.share?.includeNotes,
-    token,
-    url: enabled && token ? `${urlOrigin}/share/${token}` : null,
-  };
+function buildPayload(session, origin) {
+  const enabled = !!session?.share?.enabled;
+  const includeNotes = !!session?.share?.includeNotes;
+  const token = session?.share?.token || null;
+  const url =
+    enabled && token ? `${origin.replace(/\/$/, "")}/share/${token}` : "";
+  return { enabled, includeNotes, token, url };
 }
 
+async function loadOwnedSession({ userId, id }) {
+  await connectDB();
+  const mongoUser = await User.findOne({ clerkId: userId }).lean();
+  if (!mongoUser) return { error: "User not found", status: 404 };
+
+  const session = await Session.findOne({
+    _id: id,
+    userId: mongoUser._id,
+    $or: [{ deletedAt: null }, { deletedAt: { $exists: false } }],
+  });
+  if (!session) return { error: "Session not found", status: 404 };
+
+  return { session };
+}
+
+// GET → current share settings (owner only)
 export async function GET(req, ctx) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -33,17 +48,15 @@ export async function GET(req, ctx) {
   const { id } = (await params) || {};
   if (!id) return NextResponse.json({ error: "Missing session id" }, { status: 400 });
 
-  await connectDB();
-  const mongoUser = await User.findOne({ clerkId: userId }).lean();
-  if (!mongoUser) return NextResponse.json({ error: "User not found" }, { status: 404 });
-
-  const s = await Session.findOne({ _id: id, userId: mongoUser._id }).lean();
-  if (!s) return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  const got = await loadOwnedSession({ userId, id });
+  if ("error" in got) return NextResponse.json({ error: got.error }, { status: got.status });
 
   const origin = new URL(req.url).origin;
-  return NextResponse.json(resp(origin, s), { status: 200 });
+  const payload = buildPayload(got.session, origin);
+  return NextResponse.json(payload);
 }
 
+// PATCH → toggle enable / includeNotes (owner only)
 export async function PATCH(req, ctx) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -52,35 +65,35 @@ export async function PATCH(req, ctx) {
   const { id } = (await params) || {};
   if (!id) return NextResponse.json({ error: "Missing session id" }, { status: 400 });
 
-  const json = await req.json().catch(() => null);
-  const parsed = patchSchema.safeParse(json || {});
+  const body = await req.json().catch(() => ({}));
+  const parsed = patchSchema.safeParse(body || {});
   if (!parsed.success) {
     return NextResponse.json(
-      { error: "Validation failed", details: parsed.error.issues.map((i) => i.message) },
+      { error: "Validation failed", details: parsed.error.issues.map(i => i.message) },
       { status: 400 }
     );
   }
+
+  const got = await loadOwnedSession({ userId, id });
+  if ("error" in got) return NextResponse.json({ error: got.error }, { status: got.status });
+  const session = got.session;
+
   const { enabled, includeNotes } = parsed.data;
 
-  await connectDB();
-  const mongoUser = await User.findOne({ clerkId: userId }).lean();
-  if (!mongoUser) return NextResponse.json({ error: "User not found" }, { status: 404 });
-
-  const s = await Session.findOne({ _id: id, userId: mongoUser._id });
-  if (!s) return NextResponse.json({ error: "Session not found" }, { status: 404 });
-
   if (typeof enabled === "boolean") {
-    s.share.enabled = enabled;
-    if (enabled && !s.share.token) {
-      s.share.token = crypto.randomUUID().replace(/-/g, "").slice(0, 24);
+    session.share.enabled = enabled;
+    // if enabling and there is no token yet, mint one
+    if (enabled && !session.share.token) {
+      session.share.token = crypto.randomUUID();
     }
   }
   if (typeof includeNotes === "boolean") {
-    s.share.includeNotes = includeNotes;
+    session.share.includeNotes = includeNotes;
   }
 
-  await s.save();
+  await session.save();
 
   const origin = new URL(req.url).origin;
-  return NextResponse.json(resp(origin, s), { status: 200 });
+  const payload = buildPayload(session, origin);
+  return NextResponse.json(payload);
 }
