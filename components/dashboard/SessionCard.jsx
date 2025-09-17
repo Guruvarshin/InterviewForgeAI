@@ -1,11 +1,13 @@
+// components/dashboard/SessionCard.jsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import ExportMenu from "@/components/common/ExportMenu";
 import MoreMenu from "@/components/common/MoreMenu";
+import { toast } from "sonner";
 
 // ---- score → colors helper (no DOM access, safe on SSR) ----
 function toneForScore(score) {
@@ -62,45 +64,53 @@ export default function SessionCard({ session }) {
       ? "conic-gradient(#e5e7eb 0deg 360deg)"
       : `conic-gradient(${tone.ringHex} 0deg ${deg}deg, #e5e7eb ${deg}deg 360deg)`;
 
-  // ---- share state (comes from server; no GET on mount) ----
+  // ---- share state seeded from server, no GET on mount ----
   const [shareEnabled, setShareEnabled] = useState(!!session?.share?.enabled);
-  const [includeNotes, setIncludeNotes] = useState(!!session?.share?.includeNotes);
   const [token, setToken] = useState(session?.share?.token || null);
-  const shareUrl = useMemo(() => {
-    if (!token) return "";
-    if (typeof window === "undefined") return "";
-    return `${window.location.origin}/share/${token}`;
-  }, [token]);
-
+  const [shareUrl, setShareUrl] = useState(""); // will be filled after first PATCH success
   const [shareMenuOpen, setShareMenuOpen] = useState(false);
   const [shareBusy, setShareBusy] = useState(false);
 
-  async function patchShare(body) {
+  // Build URL locally if API didn’t send one yet (first render)
+  const localUrl = useMemo(() => {
+    if (!token || typeof window === "undefined") return "";
+    return `${window.location.origin}/share/${token}`;
+  }, [token]);
+
+  async function patchShare(nextEnabled) {
     setShareBusy(true);
     try {
       const res = await fetch(`/api/session/${id}/share`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          enabled: body.enabled ?? shareEnabled,
-          includeNotes: body.includeNotes ?? includeNotes,
-        }),
+        body: JSON.stringify({ enabled: nextEnabled }),
       });
       const j = await res.json().catch(() => ({}));
-      if (res.ok) {
-        setShareEnabled(!!j?.share?.enabled);
-        setIncludeNotes(!!j?.share?.includeNotes);
-        setToken(j?.share?.token || null);
-      }
+      if (!res.ok) throw new Error(j?.error || "Share update failed");
+
+      // API returns { enabled, includeNotes, token, url }
+      setShareEnabled(!!j.enabled);
+      setToken(j.token || null);
+      setShareUrl(j.url || "");
+
+      toast.success(j.enabled ? "Sharing enabled" : "Sharing disabled");
+    } catch (e) {
+      toast.error(e.message || "Network error");
     } finally {
       setShareBusy(false);
     }
   }
 
   function copyLink() {
-    if (!shareUrl) return;
-    navigator.clipboard?.writeText(shareUrl);
-    setShareMenuOpen(false);
+    const urlToCopy = shareUrl || localUrl;
+    if (!urlToCopy) return;
+    navigator.clipboard?.writeText(urlToCopy).then(
+      () => {
+        toast.success("Link copied");
+        setShareMenuOpen(false);
+      },
+      () => toast.error("Copy failed")
+    );
   }
 
   return (
@@ -157,6 +167,7 @@ export default function SessionCard({ session }) {
           )}
         </div>
 
+        {/* RIGHT */}
         <div className="md:ml-auto md:w-[220px] md:self-start">
           <Link href={`/session/${id}`} className="block">
             <Button className="w-full">Open</Button>
@@ -170,7 +181,7 @@ export default function SessionCard({ session }) {
               variant={shareEnabled ? "secondary" : "outline"}
               className="w-full"
               disabled={shareBusy}
-              onClick={() => patchShare({ enabled: !shareEnabled })}
+              onClick={() => patchShare(!shareEnabled)}
               title={shareEnabled ? "Disable share" : "Enable share"}
             >
               {shareEnabled ? "Shared" : "Share"}
@@ -202,9 +213,9 @@ export default function SessionCard({ session }) {
                   >
                     Copy public link
                   </button>
-                  {shareUrl && (
+                  {(shareUrl || localUrl) && (
                     <a
-                      href={shareUrl}
+                      href={shareUrl || localUrl}
                       className="block px-3 py-2 text-sm hover:bg-muted"
                       role="menuitem"
                       target="_blank"
@@ -213,20 +224,12 @@ export default function SessionCard({ session }) {
                       Open public view
                     </a>
                   )}
-                  <label className="flex cursor-pointer items-center gap-2 px-3 py-2 text-sm hover:bg-muted">
-                    <input
-                      type="checkbox"
-                      checked={includeNotes}
-                      onChange={(e) => patchShare({ includeNotes: e.target.checked })}
-                    />
-                    Share notes
-                  </label>
                   <button
                     className="block w-full px-3 py-2 text-left text-sm hover:bg-muted"
                     role="menuitem"
                     onClick={() => {
                       setShareMenuOpen(false);
-                      patchShare({ enabled: false });
+                      patchShare(false);
                     }}
                   >
                     Disable share
