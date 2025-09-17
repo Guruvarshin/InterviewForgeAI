@@ -1,3 +1,4 @@
+// app/api/session/[id]/review/route.js
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -10,8 +11,8 @@ import Session from "@/models/Session";
 import { evaluatorPrompt } from "@/lib/ai/evaluatorPrompt";
 import { assertRateLimit, rateKey } from "@/lib/rateLimit";
 import Groq from "groq-sdk";
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 const bodySchema = z.object({ force: z.boolean().optional() });
 
 function safeJSON(text) {
@@ -21,9 +22,49 @@ function safeJSON(text) {
   return JSON.parse(text.slice(start, end + 1));
 }
 
+/** NEW: GET = read existing scores/feedback
+ *  - Owner (auth) OR public (when ?token= matches enabled share)
+ */
+export async function GET(req, ctx) {
+  const { params } = ctx || {};
+  const { id } = (await params) || {};
+  if (!id) return NextResponse.json({ error: "Missing session id" }, { status: 400 });
+
+  const url = new URL(req.url);
+  const token = url.searchParams.get("token");
+
+  await connectDB();
+
+  let session;
+
+  if (token) {
+    // public read
+    session = await Session.findById(id).lean();
+    if (!session) return NextResponse.json({ error: "Session not found" }, { status: 404 });
+    const ok = !!session?.share?.enabled && token === session?.share?.token;
+    if (!ok) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  } else {
+    // owner read
+    const { userId } = await auth();
+    if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const mongoUser = await User.findOne({ clerkId: userId }).lean();
+    if (!mongoUser) return NextResponse.json({ error: "User not found" }, { status: 404 });
+    session = await Session.findOne({ _id: id, userId: mongoUser._id }).lean();
+    if (!session) return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  }
+
+  return NextResponse.json({
+    scores: session.scores || null,
+    feedback: session.feedback || null,
+    updatedAt: session.updatedAt || null,
+  });
+}
+
+/** POST = (re)run evaluation — owner only, rate-limited */
 export async function POST(req, ctx) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
   // ❸ Rate limit: 5 reviews / 10 min per user
   try {
     assertRateLimit({
@@ -44,7 +85,7 @@ export async function POST(req, ctx) {
   const parsed = bodySchema.safeParse(payload || {});
   if (!parsed.success) {
     return NextResponse.json(
-      { error: "Validation failed", details: parsed.error.issues.map(i => i.message) },
+      { error: "Validation failed", details: parsed.error.issues.map((i) => i.message) },
       { status: 400 }
     );
   }
@@ -59,7 +100,11 @@ export async function POST(req, ctx) {
     return NextResponse.json({ error: e.message, retryAfter: e.retryAfter }, { status: e.status || 429 });
   }
 
-  const session = await Session.findOne({ _id: id, userId: mongoUser._id, $or: [{ deletedAt: null }, { deletedAt: { $exists: false } }] });
+  const session = await Session.findOne({
+    _id: id,
+    userId: mongoUser._id,
+    $or: [{ deletedAt: null }, { deletedAt: { $exists: false } }],
+  });
   if (!session) return NextResponse.json({ error: "Session not found" }, { status: 404 });
 
   const prompt = evaluatorPrompt({
@@ -110,7 +155,11 @@ export async function POST(req, ctx) {
     };
 
     if (!Array.isArray(session.activity)) session.activity = [];
-    session.activity.push({ action: "reviewed", at: new Date(), meta: { overall: session.scores.overall ?? null } });
+    session.activity.push({
+      action: "reviewed",
+      at: new Date(),
+      meta: { overall: session.scores.overall ?? null },
+    });
 
     await session.save();
 

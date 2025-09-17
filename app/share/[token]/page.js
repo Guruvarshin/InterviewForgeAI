@@ -1,3 +1,4 @@
+// app/share/[token]/page.js
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -11,10 +12,12 @@ function ScoreRing({ score }) {
   const val = typeof score === "number" ? Math.max(0, Math.min(10, score)) : null;
   const deg = val != null ? (val / 10) * 360 : 0;
   const color = val == null ? "#e5e7eb" : val >= 7 ? "#10B981" : val >= 5 ? "#F59E0B" : "#F43F5E";
-  const ring = val == null
-    ? "conic-gradient(#e5e7eb 0deg 360deg)"
-    : `conic-gradient(${color} 0deg ${deg}deg, #e5e7eb ${deg}deg 360deg)`;
-  const textClass = val == null ? "text-zinc-500" : val >= 7 ? "text-emerald-600" : val >= 5 ? "text-amber-600" : "text-rose-600";
+  const ring =
+    val == null
+      ? "conic-gradient(#e5e7eb 0deg 360deg)"
+      : `conic-gradient(${color} 0deg ${deg}deg, #e5e7eb ${deg}deg 360deg)`;
+  const textClass =
+    val == null ? "text-zinc-500" : val >= 7 ? "text-emerald-600" : val >= 5 ? "text-amber-600" : "text-rose-600";
   return (
     <div className="relative grid size-20 place-items-center">
       <div className="relative size-20 rounded-full" style={{ backgroundImage: ring }}>
@@ -64,6 +67,12 @@ export default async function SharePage({ params }) {
   const jdSnippet = (doc.jdText || "").replace(/\s+/g, " ").trim();
   const showNotes = !!doc?.share?.includeNotes && !!doc?.notes;
 
+  // tokenized export links
+  const tokenQS = `?token=${encodeURIComponent(token)}`;
+  const pdfUrl = `/api/session/${id}/export${tokenQS}`;
+  const txtUrl = `/api/session/${id}/export${tokenQS}&format=txt`.replace("export?token", "export?format=txt&token");
+  const jsonUrl = `/api/session/${id}/export${tokenQS}&format=json`.replace("export?token", "export?format=json&token");
+
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-4 py-8">
       <header className="flex flex-wrap items-center justify-between gap-4">
@@ -71,9 +80,13 @@ export default async function SharePage({ params }) {
           <ScoreRing score={overall} />
           <div>
             <p className="text-xs text-muted-foreground">{when}</p>
-            <h1 className="text-xl font-semibold">{role} @ {company}</h1>
+            <h1 className="text-xl font-semibold">
+              {role} @ {company}
+            </h1>
             <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
-              <span className="inline-flex items-center rounded-full border bg-zinc-50 px-2 py-0.5 text-zinc-700">{mode}</span>
+              <span className="inline-flex items-center rounded-full border bg-zinc-50 px-2 py-0.5 text-zinc-700">
+                {mode}
+              </span>
               <span className="inline-flex items-center rounded-full border bg-zinc-50 px-2 py-0.5 text-zinc-700">
                 {transcript.length} turn{transcript.length === 1 ? "" : "s"}
               </span>
@@ -81,9 +94,15 @@ export default async function SharePage({ params }) {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <a href={`/api/session/${id}/export`}><Button variant="outline">Export PDF</Button></a>
-          <a href={`/api/session/${id}/export?format=txt`}><Button variant="outline">Export TXT</Button></a>
-          <a href={`/api/session/${id}/export?format=json`}><Button variant="outline">Export JSON</Button></a>
+          <a href={pdfUrl}>
+            <Button variant="outline">Export PDF</Button>
+          </a>
+          <a href={txtUrl}>
+            <Button variant="outline">Export TXT</Button>
+          </a>
+          <a href={jsonUrl}>
+            <Button variant="outline">Export JSON</Button>
+          </a>
         </div>
       </header>
 
@@ -96,7 +115,9 @@ export default async function SharePage({ params }) {
 
       <section className="rounded-xl border p-4">
         <h2 className="mb-3 text-sm font-medium">Scores</h2>
-        {categories ? <CategoryGrid categories={categories} /> : (
+        {categories ? (
+          <CategoryGrid categories={categories} />
+        ) : (
           <p className="text-sm text-muted-foreground">No evaluation yet.</p>
         )}
       </section>
@@ -111,11 +132,12 @@ export default async function SharePage({ params }) {
       <section className="rounded-xl border p-4">
         <h2 className="mb-3 text-sm font-medium">Transcript (read-only)</h2>
         <div className="space-y-2">
-          {transcript.length === 0 && (
-            <p className="text-sm text-muted-foreground">No messages yet.</p>
-          )}
+          {transcript.length === 0 && <p className="text-sm text-muted-foreground">No messages yet.</p>}
           {transcript.map((t, i) => (
-            <div key={i} className={`rounded-md border p-2 text-sm ${t.speaker === "ai" ? "bg-muted" : "bg-background"}`}>
+            <div
+              key={i}
+              className={`rounded-md border p-2 text-sm ${t.speaker === "ai" ? "bg-muted" : "bg-background"}`}
+            >
               <p className="mb-1 font-medium">{t.speaker === "ai" ? "AI" : "Candidate"}</p>
               <p className="whitespace-pre-wrap">{t.text}</p>
             </div>
@@ -124,7 +146,9 @@ export default async function SharePage({ params }) {
       </section>
 
       <footer className="flex items-center justify-between">
-        <Link href="/"><Button variant="ghost">InterviewForge</Button></Link>
+        <Link href="/">
+          <Button variant="ghost">InterviewForge</Button>
+        </Link>
         <p className="text-xs text-muted-foreground">
           Shared view, notes {showNotes ? "included" : "hidden"} by owner settings.
         </p>
