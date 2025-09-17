@@ -1,3 +1,4 @@
+// app/api/session/[id]/export/route.js
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -62,7 +63,6 @@ function buildTxt(session) {
 
 async function buildPdf(session) {
   const s = sessionToPlain(session);
-
   const pdf = await PDFDocument.create();
   let page = pdf.addPage([595.28, 841.89]); // A4
   const margin = 48;
@@ -86,7 +86,6 @@ async function buildPdf(session) {
     } = opts;
     const font = bold ? fontBold : fontRegular;
 
-    // word wrap
     const words = String(text).split(/\s+/);
     let line = "";
     const lines = [];
@@ -139,7 +138,7 @@ async function buildPdf(session) {
   // JD (brief)
   if (s.jdText) {
     drawText("Job Description (summary)", { size: 14, bold: true, leading: 8 });
-    drawText(s.jdText.slice(0, 1600), { size: 12 }); // keep file small
+    drawText(s.jdText.slice(0, 1600), { size: 12 });
     y -= 6;
   }
 
@@ -157,20 +156,35 @@ async function buildPdf(session) {
 export async function GET(req, ctx) {
   const url = new URL(req.url);
   const format = (url.searchParams.get("format") || "pdf").toLowerCase();
-
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const token = url.searchParams.get("token"); // ← token support
 
   const { params } = ctx || {};
   const { id } = (await params) || {};
   if (!id) return NextResponse.json({ error: "Missing session id" }, { status: 400 });
 
   await connectDB();
-  const mongoUser = await User.findOne({ clerkId: userId }).lean();
-  if (!mongoUser) return NextResponse.json({ error: "User not found" }, { status: 404 });
+  const sessionDoc = await Session.findById(id).lean();
+  if (!sessionDoc) return NextResponse.json({ error: "Session not found" }, { status: 404 });
 
-  const session = await Session.findOne({ _id: id, userId: mongoUser._id }).lean();
-  if (!session) return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  // Public access if token matches and share is enabled
+  const publicOK = !!token && !!sessionDoc?.share?.enabled && token === sessionDoc?.share?.token;
+
+  if (!publicOK) {
+    // Owner-only fallback
+    const { userId } = await auth();
+    if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const mongoUser = await User.findOne({ clerkId: userId }).lean();
+    if (!mongoUser) return NextResponse.json({ error: "User not found" }, { status: 404 });
+
+    const owned = String(sessionDoc.userId) === String(mongoUser._id);
+    if (!owned) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  // Respect "share notes" when public
+  const session = { ...sessionDoc };
+  if (publicOK && !sessionDoc?.share?.includeNotes) {
+    session.notes = "";
+  }
 
   const base = sanitizeFileName(
     `${session.role || "Software_Engineer"}_${session.company || "Company"}`
