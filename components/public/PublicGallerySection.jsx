@@ -1,9 +1,11 @@
+// components/public/PublicGallerySection.jsx
 import { connectDB } from "@/lib/db";
 import Session from "@/models/Session";
 import User from "@/models/User";
 import PublicSessionCard from "./PublicSessionCard";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+
 function escapeRegex(s = "") {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -11,31 +13,34 @@ function escapeRegex(s = "") {
 export default async function PublicGallerySection({ sp = {} }) {
   await connectDB();
 
-  // ---------- Build base query (shared & not deleted) ----------
+  // Normalize sp → strings (trimmed)
+  const _sp = Object.fromEntries(
+    Object.entries(sp).map(([k, v]) => [k, String(v ?? "").trim()])
+  );
+
+  // ---------- Base query: only shared & not deleted ----------
   const query = {
     "share.enabled": true,
     $or: [{ deletedAt: null }, { deletedAt: { $exists: false } }],
   };
 
   // ---------- Filters (User / Company / Role) ----------
-  let userIdsFilter = null;
-
-  if (sp.user) {
-    const rx = new RegExp(escapeRegex(String(sp.user)), "i");
+  if (_sp.user) {
+    const rx = new RegExp(escapeRegex(_sp.user), "i");
     const users = await User.find({ $or: [{ name: rx }, { email: rx }] })
       .select({ _id: 1 })
       .lean();
 
-    // Always keep the filter UI visible; if no users match, force zero results via empty $in
-    userIdsFilter = users.map((u) => u._id);
-    query.userId = { $in: userIdsFilter.length ? userIdsFilter : [null] };
+    // If no matching users, force zero results while keeping the filter UI visible.
+    const userIds = users.map((u) => u._id);
+    query.userId = { $in: userIds.length ? userIds : [null] };
   }
 
-  if (sp.company) {
-    query.company = new RegExp(escapeRegex(String(sp.company)), "i");
+  if (_sp.company) {
+    query.company = new RegExp(escapeRegex(_sp.company), "i");
   }
-  if (sp.role) {
-    query.role = new RegExp(escapeRegex(String(sp.role)), "i");
+  if (_sp.role) {
+    query.role = new RegExp(escapeRegex(_sp.role), "i");
   }
 
   // ---------- Fetch ----------
@@ -44,28 +49,31 @@ export default async function PublicGallerySection({ sp = {} }) {
     .limit(48)
     .lean();
 
-  // map user names for cards (still do this even if 0 items so UI remains)
+  // Map user names for cards (even if empty → UI stays consistent)
   const uids = [...new Set(items.map((i) => String(i.userId)))];
   const usersById =
     uids.length > 0
       ? new Map(
-          (await User.find({ _id: { $in: uids } })
-            .select({ _id: 1, name: 1, email: 1 })
-            .lean()
+          (
+            await User.find({ _id: { $in: uids } })
+              .select({ _id: 1, name: 1, email: 1 })
+              .lean()
           ).map((u) => [String(u._id), u])
         )
       : new Map();
 
   const cards = items.map((i) => ({
     token: i?.share?.token,
-    overall: typeof i?.scores?.overall === "number" ? Number(i.scores.overall) : null,
+    overall:
+      typeof i?.scores?.overall === "number" ? Number(i.scores.overall) : null,
     role: i.role || "Software Engineer",
     company: i.company || "Company",
     jdText: i.jdText || "",
     turns: Array.isArray(i.transcript) ? i.transcript.length : 0,
     mode: i?.settings?.mode || "combo",
     createdAt: i.createdAt ? new Date(i.createdAt).toISOString() : null,
-    userName: usersById.get(String(i.userId))?.name ||
+    userName:
+      usersById.get(String(i.userId))?.name ||
       usersById.get(String(i.userId))?.email ||
       "User",
   }));
@@ -81,13 +89,13 @@ export default async function PublicGallerySection({ sp = {} }) {
           </p>
         </div>
 
-        {/* GET filter form, stays visible even if there are no results */}
+        {/* GET filter form → soft navigation via App Router */}
         <form action="/" method="get" className="flex flex-wrap items-end gap-2">
           <div>
             <label className="block text-xs text-muted-foreground">User</label>
             <input
               name="user"
-              defaultValue={sp.user || ""}
+              defaultValue={_sp.user || ""}
               className="h-9 rounded-md border bg-background px-2 text-sm"
               placeholder="Name or email"
             />
@@ -96,7 +104,7 @@ export default async function PublicGallerySection({ sp = {} }) {
             <label className="block text-xs text-muted-foreground">Company</label>
             <input
               name="company"
-              defaultValue={sp.company || ""}
+              defaultValue={_sp.company || ""}
               className="h-9 rounded-md border bg-background px-2 text-sm"
               placeholder="e.g., Zoho"
             />
@@ -105,7 +113,7 @@ export default async function PublicGallerySection({ sp = {} }) {
             <label className="block text-xs text-muted-foreground">Job title</label>
             <input
               name="role"
-              defaultValue={sp.role || ""}
+              defaultValue={_sp.role || ""}
               className="h-9 rounded-md border bg-background px-2 text-sm"
               placeholder="e.g., SDE"
             />
